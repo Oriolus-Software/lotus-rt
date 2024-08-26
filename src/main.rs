@@ -26,10 +26,21 @@ fn main() {
         println!("After 1 second");
     });
 
-    lotus_rt::tick();
-    lotus_rt::tick();
-    lotus_rt::tick();
-    lotus_rt::tick();
+    let (tx, rx) = lotus_rt::sync::oneshot::channel();
+
+    lotus_rt::spawn(async move {
+        println!("Received {}", rx.await.unwrap());
+    });
+
+    lotus_rt::spawn(async move {
+        println!("Sending 42");
+        tx.send(42).unwrap();
+    });
+
+    for i in 0..5 {
+        println!("Tick {i}");
+        lotus_rt::tick();
+    }
 
     std::thread::sleep(Duration::from_secs(1));
 

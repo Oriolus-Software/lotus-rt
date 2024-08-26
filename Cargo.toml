@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["std"]
+default = ["std", "sync"]
 std = []
 lotus = ["dep:lotus-script"]
+sync = ["dep:tokio", "tokio/sync"]
 
 [dependencies]
 lotus-script = { version = "0.5", optional = true }
+tokio = { version = "1.39.3", default-features = false, optional = true }

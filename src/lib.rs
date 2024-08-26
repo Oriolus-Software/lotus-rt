@@ -6,6 +6,11 @@ use std::{
     task::{RawWaker, RawWakerVTable, Waker},
 };
 
+#[cfg(feature = "sync")]
+pub mod sync {
+    pub use tokio::sync::*;
+}
+
 #[derive(Default)]
 struct Runtime {
     futures: Vec<MyFuture>,
@@ -157,6 +162,42 @@ pub mod wait {
             #[cfg(not(feature = "std"))]
             {
                 elapsed += lotus_script::delta();
+            }
+        }
+    }
+
+    #[cfg(feature = "lotus")]
+    pub use self::lotus::*;
+    #[cfg(feature = "lotus")]
+    mod lotus {
+        use lotus_script::input::{ActionState, ActionStateKind};
+
+        pub async fn action(id: &str) -> ActionState {
+            loop {
+                let state = lotus_script::action::state(id);
+                if state.kind != ActionStateKind::None {
+                    return state;
+                }
+
+                super::next_tick().await;
+            }
+        }
+
+        pub async fn just_pressed(id: &str) -> ActionState {
+            loop {
+                let state = self::action(id).await;
+                if state.kind.is_just_pressed() {
+                    return state;
+                }
+            }
+        }
+
+        pub async fn just_released(id: &str) -> ActionState {
+            loop {
+                let state = self::action(id).await;
+                if state.kind.is_just_released() {
+                    return state;
+                }
             }
         }
     }
