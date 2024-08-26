@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use lotus_rt::wait;
 
 fn main() {
@@ -19,9 +21,18 @@ fn main() {
         println!("After techically 4 ticks");
     });
 
+    lotus_rt::spawn(async move {
+        wait::seconds(1.0).await;
+        println!("After 1 second");
+    });
+
     lotus_rt::tick();
     lotus_rt::tick();
     lotus_rt::tick();
+    lotus_rt::tick();
+
+    std::thread::sleep(Duration::from_secs(1));
+
     lotus_rt::tick();
 }
 

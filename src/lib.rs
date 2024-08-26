@@ -10,6 +10,7 @@ use std::{
 struct Runtime {
     futures: Vec<MyFuture>,
     on_tick: Vec<Box<dyn FnOnce()>>,
+    timers: Timers,
 }
 
 thread_local! {
@@ -46,6 +47,8 @@ impl Runtime {
             f();
         }
 
+        self.timers.tick();
+
         while let Some(future) = self.futures.pop() {
             let waker = future.create_waker();
 
@@ -56,6 +59,59 @@ impl Runtime {
                 std::task::Poll::Ready(_) => {}
                 std::task::Poll::Pending => {}
             }
+        }
+    }
+}
+
+#[derive(Default)]
+struct Timers {
+    #[cfg(feature = "std")]
+    last: Option<std::time::Instant>,
+    timers: Vec<Timer>,
+    buf: Vec<Timer>,
+}
+
+struct Timer {
+    left: f32,
+    callback: Box<dyn FnOnce()>,
+}
+
+impl Timers {
+    pub fn add(&mut self, timer: Timer) {
+        self.timers.push(timer);
+    }
+
+    fn tick(&mut self) {
+        #[cfg(feature = "std")]
+        {
+            let elapsed = {
+                #[cfg(feature = "std")]
+                {
+                    let now = std::time::Instant::now();
+                    let elapsed = self
+                        .last
+                        .map(|last| now.duration_since(last).as_secs_f32())
+                        .unwrap_or(0.0);
+                    self.last = Some(now);
+                    elapsed
+                }
+                #[cfg(not(feature = "std"))]
+                {
+                    lotus_script::delta()
+                }
+            };
+
+            while let Some(mut timer) = self.timers.pop() {
+                timer.left -= elapsed;
+
+                if timer.left <= 0.0 {
+                    (timer.callback)();
+                } else {
+                    self.buf.push(timer);
+                }
+            }
+
+            std::mem::swap(&mut self.timers, &mut self.buf);
         }
     }
 }
@@ -104,9 +160,14 @@ impl MyFuture {
 }
 
 pub mod wait {
-    use std::{future::Future, pin::Pin};
+    use std::{
+        future::Future,
+        ops::DerefMut,
+        pin::Pin,
+        task::{Context, Poll},
+    };
 
-    use crate::get_rt;
+    use crate::{get_rt, Timer};
 
     struct WaitTicks {
         left: usize,
@@ -140,6 +201,41 @@ pub mod wait {
 
     pub fn ticks(count: usize) -> impl Future<Output = ()> {
         WaitTicks { left: count }
+    }
+
+    enum TimerFut {
+        Init(f32),
+        Waiting,
+        Finished,
+    }
+
+    impl Future for TimerFut {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            match *self {
+                TimerFut::Init(time) => {
+                    let waker = cx.waker().clone();
+                    let fut = self.deref_mut() as *mut TimerFut;
+                    get_rt().timers.add(Timer {
+                        left: time,
+                        callback: Box::new(move || {
+                            let fut = unsafe { &mut *fut };
+                            *fut = TimerFut::Finished;
+                            waker.wake();
+                        }),
+                    });
+                    *self = TimerFut::Waiting;
+                    Poll::Pending
+                }
+                TimerFut::Waiting => Poll::Pending,
+                TimerFut::Finished => Poll::Ready(()),
+            }
+        }
+    }
+
+    pub fn seconds(count: f32) -> impl Future<Output = ()> {
+        TimerFut::Init(count)
     }
 
     #[cfg(test)]

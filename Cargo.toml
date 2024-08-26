@@ -3,4 +3,10 @@ name = "lotus-rt"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["std"]
+std = []
+lotus = ["dep:lotus-script"]
+
 [dependencies]
+lotus-script = { version = "0.5", optional = true }
