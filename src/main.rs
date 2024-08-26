@@ -3,6 +3,7 @@ use std::time::Duration;
 use lotus_rt::wait;
 
 fn main() {
+    let start = std::time::Instant::now();
     lotus_rt::spawn(async move {
         lotus_rt::spawn(async move {
             println!("Hello, nested world!");
@@ -56,6 +57,9 @@ fn main() {
     std::thread::sleep(Duration::from_secs(1));
 
     lotus_rt::tick();
+
+    let elapsed = start.elapsed();
+    println!("Elapsed: {:?}", elapsed);
 }
 
 async fn generate_value<T>(val: T) -> T {
