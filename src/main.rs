@@ -42,17 +42,6 @@ fn main() {
         println!("{} + {} = {}", a, b, a + b);
     });
 
-    lotus_rt::spawn(async move {
-        lotus_rt::select! {
-            _ = wait::ticks(3) => {
-                println!("After 3 ticks");
-            }
-            _ = wait::seconds(1.0) => {
-                println!("After 1 second");
-            }
-        }
-    });
-
     for i in 0..5 {
         println!("Tick {i}");
         lotus_rt::tick();
