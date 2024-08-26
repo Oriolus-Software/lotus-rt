@@ -1,11 +1,13 @@
 use std::{
     cell::UnsafeCell,
+    collections::BinaryHeap,
     future::Future,
     pin::Pin,
     rc::Rc,
     task::{RawWaker, RawWakerVTable, Waker},
 };
 
+pub mod wait;
 #[cfg(feature = "sync")]
 pub mod sync {
     pub use tokio::sync::*;
@@ -15,8 +17,9 @@ pub use tokio::{join, pin, try_join};
 
 #[derive(Default)]
 struct Runtime {
+    current_tick: u64,
     futures: Vec<MyFuture>,
-    on_tick: Vec<Box<dyn FnOnce()>>,
+    on_tick: BinaryHeap<TickTimer>,
 }
 
 thread_local! {
@@ -49,10 +52,28 @@ impl Runtime {
     }
 
     pub fn tick(&mut self) {
-        for f in self.on_tick.drain(..) {
-            f();
+        #[cfg(feature = "std")]
+        {
+            self.current_tick += 1;
+        }
+        #[cfg(feature = "lotus")]
+        {
+            self.current_tick = lotus_script::time::ticks_alive();
         }
 
+        while let Some(timer) = self.on_tick.pop() {
+            if timer.expires <= self.current_tick {
+                (timer.callback)();
+            } else {
+                self.on_tick.push(timer);
+                break;
+            }
+        }
+
+        self.execute();
+    }
+
+    pub fn execute(&mut self) {
         while let Some(future) = self.futures.pop() {
             let waker = future.create_waker();
 
@@ -64,6 +85,31 @@ impl Runtime {
                 std::task::Poll::Pending => {}
             }
         }
+    }
+}
+
+struct TickTimer {
+    expires: u64,
+    callback: Box<dyn FnOnce()>,
+}
+
+impl PartialEq for TickTimer {
+    fn eq(&self, other: &Self) -> bool {
+        self.expires == other.expires
+    }
+}
+
+impl Eq for TickTimer {}
+
+impl PartialOrd for TickTimer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.expires.cmp(&other.expires))
+    }
+}
+
+impl Ord for TickTimer {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.expires.cmp(&other.expires)
     }
 }
 
@@ -110,105 +156,26 @@ impl MyFuture {
     }
 }
 
-pub mod wait {
-    use std::{future::Future, pin::Pin};
+#[cfg(test)]
+mod tests {
+    use std::{
+        rc::Rc,
+        sync::atomic::{AtomicU8, Ordering},
+    };
 
-    use crate::get_rt;
+    #[test]
+    fn rt_simple_tick() {
+        let counter = Rc::new(AtomicU8::new(0));
 
-    struct WaitTicks {
-        left: usize,
-    }
-
-    impl Future for WaitTicks {
-        type Output = ();
-
-        fn poll(
-            mut self: Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Self::Output> {
-            if self.left != 0 {
-                self.left -= 1;
-
-                let waker = cx.waker().clone();
-                get_rt().on_tick.push(Box::new(move || {
-                    waker.wake();
-                }));
-
-                std::task::Poll::Pending
-            } else {
-                std::task::Poll::Ready(())
-            }
-        }
-    }
-
-    pub fn next_tick() -> impl Future<Output = ()> {
-        WaitTicks { left: 1 }
-    }
-
-    pub fn ticks(count: usize) -> impl Future<Output = ()> {
-        WaitTicks { left: count }
-    }
-
-    pub async fn seconds(count: f32) {
-        let mut elapsed = 0.0;
-        #[cfg(feature = "std")]
-        let start = std::time::Instant::now();
-
-        while elapsed < count {
-            next_tick().await;
-            #[cfg(feature = "std")]
-            {
-                elapsed = start.elapsed().as_secs_f32();
-            }
-
-            #[cfg(not(feature = "std"))]
-            {
-                elapsed += lotus_script::delta();
-            }
-        }
-    }
-
-    #[cfg(feature = "lotus")]
-    pub use self::lotus::*;
-    #[cfg(feature = "lotus")]
-    mod lotus {
-        use lotus_script::input::{ActionState, ActionStateKind};
-
-        pub async fn action(id: &str) -> ActionState {
-            loop {
-                let state = lotus_script::action::state(id);
-                if state.kind != ActionStateKind::None {
-                    return state;
-                }
-
-                super::next_tick().await;
-            }
+        {
+            let counter = counter.clone();
+            crate::spawn(async move {
+                counter.fetch_add(1, Ordering::Relaxed);
+            });
         }
 
-        pub async fn just_pressed(id: &str) -> ActionState {
-            loop {
-                let state = self::action(id).await;
-                if state.kind.is_just_pressed() {
-                    return state;
-                }
-            }
-        }
+        crate::tick();
 
-        pub async fn just_released(id: &str) -> ActionState {
-            loop {
-                let state = self::action(id).await;
-                if state.kind.is_just_released() {
-                    return state;
-                }
-            }
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn test_next_tick() {}
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
     }
 }

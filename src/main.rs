@@ -42,6 +42,12 @@ fn main() {
         println!("{} + {} = {}", a, b, a + b);
     });
 
+    lotus_rt::spawn(async move {
+        wait::ticks(5).await;
+
+        println!("After techincally 6 ticks");
+    });
+
     for i in 0..5 {
         println!("Tick {i}");
         lotus_rt::tick();
