@@ -1,3 +1,5 @@
+#![cfg_attr(test, feature(test))]
+
 use std::{
     cell::UnsafeCell,
     collections::BinaryHeap,
@@ -20,6 +22,15 @@ struct Runtime {
     current_tick: u64,
     futures: Vec<MyFuture>,
     on_tick: BinaryHeap<TickTimer>,
+}
+
+impl Runtime {
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.current_tick = 0;
+        self.futures.clear();
+        self.on_tick.clear();
+    }
 }
 
 thread_local! {
@@ -158,13 +169,27 @@ impl MyFuture {
 
 #[cfg(test)]
 mod tests {
+    extern crate test;
+
     use std::{
         rc::Rc,
         sync::atomic::{AtomicU8, Ordering},
     };
 
+    use crate::get_rt;
+
+    pub fn with_runtime<F, R>(f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let rt = get_rt();
+        let result = f();
+        rt.clear();
+        result
+    }
+
     #[test]
-    fn rt_simple_tick() {
+    fn test_rt_simple_tick() {
         let counter = Rc::new(AtomicU8::new(0));
 
         {
@@ -177,5 +202,107 @@ mod tests {
         crate::tick();
 
         assert_eq!(counter.load(Ordering::Relaxed), 1);
+    }
+
+    #[bench]
+    fn bench_rt_empty(b: &mut test::Bencher) {
+        with_runtime(|| {
+            get_rt().clear();
+            b.iter(|| crate::tick());
+        });
+    }
+
+    #[bench]
+    fn bench_rt_1_future(b: &mut test::Bencher) {
+        with_runtime(|| {
+            crate::spawn(async {
+                loop {
+                    crate::wait::next_tick().await;
+                }
+            });
+
+            b.bytes = 1;
+            b.iter(|| crate::tick());
+        });
+    }
+
+    #[bench]
+    fn bench_rt_2_futures(b: &mut test::Bencher) {
+        with_runtime(|| {
+            for _ in 0..2 {
+                crate::spawn(async {
+                    loop {
+                        crate::wait::next_tick().await;
+                    }
+                });
+            }
+
+            b.bytes = 2;
+            b.iter(|| crate::tick());
+        });
+    }
+
+    #[bench]
+    fn bench_rt_5_futures(b: &mut test::Bencher) {
+        with_runtime(|| {
+            for _ in 0..5 {
+                crate::spawn(async {
+                    loop {
+                        crate::wait::next_tick().await;
+                    }
+                });
+            }
+
+            b.bytes = 5;
+            b.iter(|| crate::tick());
+        });
+    }
+
+    #[bench]
+    fn bench_rt_100_futures(b: &mut test::Bencher) {
+        with_runtime(|| {
+            for _ in 0..100 {
+                crate::spawn(async {
+                    loop {
+                        crate::wait::next_tick().await;
+                    }
+                });
+            }
+
+            b.bytes = 100;
+            b.iter(|| crate::tick());
+        });
+    }
+
+    #[bench]
+    fn bench_rt_1000_futures(b: &mut test::Bencher) {
+        with_runtime(|| {
+            for _ in 0..1000 {
+                crate::spawn(async {
+                    loop {
+                        crate::wait::next_tick().await;
+                    }
+                });
+            }
+
+            b.bytes = 1000;
+            b.iter(|| crate::tick());
+        });
+    }
+
+    #[bench]
+    fn bench_rt_10_000_futures(b: &mut test::Bencher) {
+        with_runtime(|| {
+            for _ in 0..10_000 {
+                crate::spawn(async {
+                    loop {
+                        crate::wait::next_tick().await;
+                    }
+                });
+            }
+
+            b.bytes = 10_000;
+            b.iter(|| crate::tick());
+        });
     }
 }
