@@ -221,7 +221,6 @@ mod tests {
                 }
             });
 
-            b.bytes = 1;
             b.iter(|| crate::tick());
         });
     }
@@ -237,7 +236,6 @@ mod tests {
                 });
             }
 
-            b.bytes = 2;
             b.iter(|| crate::tick());
         });
     }
@@ -253,7 +251,6 @@ mod tests {
                 });
             }
 
-            b.bytes = 5;
             b.iter(|| crate::tick());
         });
     }
@@ -269,7 +266,6 @@ mod tests {
                 });
             }
 
-            b.bytes = 100;
             b.iter(|| crate::tick());
         });
     }
@@ -285,7 +281,6 @@ mod tests {
                 });
             }
 
-            b.bytes = 1000;
             b.iter(|| crate::tick());
         });
     }
@@ -301,7 +296,6 @@ mod tests {
                 });
             }
 
-            b.bytes = 10_000;
             b.iter(|| crate::tick());
         });
     }
