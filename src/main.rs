@@ -37,6 +37,22 @@ fn main() {
         tx.send(42).unwrap();
     });
 
+    lotus_rt::spawn(async move {
+        let (a, b) = lotus_rt::join!(generate_value(42), generate_value(7));
+        println!("{} + {} = {}", a, b, a + b);
+    });
+
+    lotus_rt::spawn(async move {
+        lotus_rt::select! {
+            _ = wait::ticks(3) => {
+                println!("After 3 ticks");
+            }
+            _ = wait::seconds(1.0) => {
+                println!("After 1 second");
+            }
+        }
+    });
+
     for i in 0..5 {
         println!("Tick {i}");
         lotus_rt::tick();
@@ -45,6 +61,10 @@ fn main() {
     std::thread::sleep(Duration::from_secs(1));
 
     lotus_rt::tick();
+}
+
+async fn generate_value<T>(val: T) -> T {
+    val
 }
 
 async fn add(a: i32, b: i32) -> i32 {

@@ -11,6 +11,8 @@ pub mod sync {
     pub use tokio::sync::*;
 }
 
+pub use tokio::{join, pin, try_join};
+
 #[derive(Default)]
 struct Runtime {
     futures: Vec<MyFuture>,

@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["std", "sync"]
+default = ["std", "sync", "macros"]
 std = []
 lotus = ["dep:lotus-script"]
 sync = ["dep:tokio", "tokio/sync"]
+macros = ["dep:tokio", "tokio/macros"]
 
 [dependencies]
 lotus-script = { version = "0.5", optional = true }
