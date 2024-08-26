@@ -1,3 +1,5 @@
+use lotus_rt::wait;
+
 fn main() {
     lotus_rt::spawn(async move {
         lotus_rt::spawn(async move {
@@ -5,17 +7,25 @@ fn main() {
         });
 
         println!("Hello, world!");
-
-        lotus_rt::spawn(async move {
-            println!("3 + 5 = {}", add(3, 5).await);
-        });
     });
 
+    lotus_rt::spawn(async move {
+        println!("Loading, please wait...");
+        println!("3 + 5 = {}", add(3, 5).await);
+    });
+
+    lotus_rt::spawn(async move {
+        wait::ticks(3).await;
+        println!("After techically 4 ticks");
+    });
+
+    lotus_rt::tick();
+    lotus_rt::tick();
     lotus_rt::tick();
     lotus_rt::tick();
 }
 
 async fn add(a: i32, b: i32) -> i32 {
-    lotus_rt::next_tick().await;
+    wait::next_tick().await;
     a + b
 }

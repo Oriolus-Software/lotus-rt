@@ -7,9 +7,8 @@ use std::{
 };
 
 #[derive(Default)]
-pub struct Runtime {
-    todo: Vec<Pin<Box<dyn Future<Output = ()>>>>,
-    pending: Vec<Pin<Box<dyn Future<Output = ()>>>>,
+struct Runtime {
+    futures: Vec<MyFuture>,
     on_tick: Vec<Box<dyn FnOnce()>>,
 }
 
@@ -38,7 +37,8 @@ impl Runtime {
     where
         F: Future<Output = ()> + 'static,
     {
-        self.todo.push(Box::pin(f));
+        self.futures
+            .push(MyFuture(Rc::new(UnsafeCell::new(Box::pin(f)))));
     }
 
     pub fn tick(&mut self) {
@@ -46,64 +46,107 @@ impl Runtime {
             f();
         }
 
-        let mut pending = Vec::with_capacity(self.todo.len());
-
-        while let Some(mut future) = self.todo.pop() {
-            let raw_waker = RawWaker::new(std::ptr::null(), &RAW_WAKER_VTABLE);
-            let waker = unsafe { Waker::from_raw(raw_waker) };
+        while let Some(future) = self.futures.pop() {
+            let waker = future.create_waker();
 
             let mut cx = std::task::Context::from_waker(&waker);
+            let future = unsafe { &mut *future.0.get() };
+
             match future.as_mut().poll(&mut cx) {
                 std::task::Poll::Ready(_) => {}
-                std::task::Poll::Pending => pending.push(future),
+                std::task::Poll::Pending => {}
             }
         }
-
-        self.pending.extend(pending);
     }
 }
 
 const RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
-    |p| RawWaker::new(p, &RAW_WAKER_VTABLE),
+    |p| {
+        RawWaker::new(
+            {
+                let fut = unsafe { MyFuture::from_raw(p) };
+                let new = fut.clone();
+                std::mem::forget(fut);
+                new.into_raw()
+            },
+            &RAW_WAKER_VTABLE,
+        )
+    },
+    |p| {
+        let fut = unsafe { MyFuture::from_raw(p) };
+        get_rt().futures.push(fut);
+    },
     |_| todo!(),
-    |_| todo!(),
-    |_| {},
+    |p| unsafe {
+        MyFuture::from_raw(p);
+    },
 );
 
-struct MyFuture {
-    fut: Pin<Box<dyn Future<Output = ()>>>,
-    fut_data: Rc<UnsafeCell<MyFutureData>>,
-}
+#[derive(Clone)]
+struct MyFuture(Rc<UnsafeCell<Pin<Box<dyn Future<Output = ()>>>>>);
 
-struct MyFutureData {
-    should_poll: bool,
-}
+impl MyFuture {
+    fn create_waker(&self) -> Waker {
+        let data = Rc::into_raw(self.0.clone()) as *const ();
+        let raw_waker = RawWaker::new(data, &RAW_WAKER_VTABLE);
+        unsafe { Waker::from_raw(raw_waker) }
+    }
 
-struct NextTickFut {
-    polled: bool,
-}
+    fn into_raw(self) -> *const () {
+        Rc::into_raw(self.0) as *const ()
+    }
 
-impl Future for NextTickFut {
-    type Output = ();
-
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        if !self.polled {
-            let waker = cx.waker().clone();
-            let b = &mut self.polled as *mut bool;
-            get_rt().on_tick.push(Box::new(move || {
-                unsafe { *b = true };
-                waker.wake();
-            }));
-            std::task::Poll::Pending
-        } else {
-            std::task::Poll::Ready(())
-        }
+    unsafe fn from_raw(ptr: *const ()) -> Self {
+        Self(Rc::from_raw(
+            ptr as *const UnsafeCell<Pin<Box<dyn Future<Output = ()>>>>,
+        ))
     }
 }
 
-pub fn next_tick() -> impl Future<Output = ()> {
-    NextTickFut { polled: false }
+pub mod wait {
+    use std::{future::Future, pin::Pin};
+
+    use crate::get_rt;
+
+    struct WaitTicks {
+        left: usize,
+    }
+
+    impl Future for WaitTicks {
+        type Output = ();
+
+        fn poll(
+            mut self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            if self.left != 0 {
+                self.left -= 1;
+
+                let waker = cx.waker().clone();
+                get_rt().on_tick.push(Box::new(move || {
+                    waker.wake();
+                }));
+
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(())
+            }
+        }
+    }
+
+    pub fn next_tick() -> impl Future<Output = ()> {
+        WaitTicks { left: 1 }
+    }
+
+    pub fn ticks(count: usize) -> impl Future<Output = ()> {
+        WaitTicks { left: count }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_next_tick() {}
+    }
 }
