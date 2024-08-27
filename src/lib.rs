@@ -204,7 +204,7 @@ struct MyFuture(Rc<UnsafeCell<Pin<Box<dyn Future<Output = ()>>>>>);
 
 impl MyFuture {
     fn create_waker(&self) -> Waker {
-        let data = Rc::into_raw(self.0.clone()) as *const ();
+        let data = Rc::into_raw(self.0.clone()).cast();
         let raw_waker = RawWaker::new(data, &RAW_WAKER_VTABLE);
         unsafe { Waker::from_raw(raw_waker) }
     }
@@ -216,9 +216,7 @@ impl MyFuture {
 
     #[inline(always)]
     unsafe fn from_raw(ptr: *const ()) -> Self {
-        Self(Rc::from_raw(
-            ptr as *const UnsafeCell<Pin<Box<dyn Future<Output = ()>>>>,
-        ))
+        Self(Rc::from_raw(ptr.cast()))
     }
 }
 

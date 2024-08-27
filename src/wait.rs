@@ -57,7 +57,7 @@ mod ticks {
         #[inline(always)]
         fn drop(&mut self) {
             if let WaitTicks::Waiting(dropped) = self {
-                unsafe { *dropped.get() = true };
+                unsafe { dropped.get().write(true) };
             }
         }
     }
