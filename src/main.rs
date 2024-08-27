@@ -51,10 +51,10 @@ fn main() {
     });
 
     lotus_rt::spawn(async move {
-        let a = wait::ticks(1);
-        let b = wait::ticks(2);
+        let a = wait::ticks(2);
+        let b = wait::ticks(1);
 
-        tokio::select! {
+        lotus_rt::select! {
             _ = a => println!("a finished first"),
             _ = b => println!("b finished first"),
         }

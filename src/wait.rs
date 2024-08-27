@@ -94,7 +94,10 @@ pub async fn seconds(count: f32) {
 pub use self::lotus::*;
 #[cfg(feature = "lotus")]
 mod lotus {
-    use lotus_script::input::{ActionState, ActionStateKind};
+    use lotus_script::{
+        input::{ActionState, ActionStateKind},
+        var::VariableType,
+    };
 
     pub async fn action(id: &str) -> ActionState {
         loop {
@@ -124,6 +127,18 @@ mod lotus {
             }
         }
     }
+
+    pub async fn variable_change<T: VariableType + PartialEq>(name: &str) -> T {
+        let current = T::get(name);
+        loop {
+            let new = T::get(name);
+            if new != current {
+                return new;
+            }
+
+            super::next_tick().await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -133,24 +148,28 @@ mod tests {
         sync::atomic::{AtomicU8, Ordering},
     };
 
+    use crate::tests::with_runtime;
+
     #[test]
     fn test_next_tick() {
-        let counter = Rc::new(AtomicU8::new(0));
+        with_runtime(|| {
+            let counter = Rc::new(AtomicU8::new(0));
 
-        {
-            let counter = counter.clone();
-            crate::spawn(async move {
-                crate::wait::next_tick().await;
-                counter.fetch_add(1, Ordering::SeqCst);
-            });
-        }
+            {
+                let counter = counter.clone();
+                crate::spawn(async move {
+                    crate::wait::next_tick().await;
+                    counter.fetch_add(1, Ordering::SeqCst);
+                });
+            }
 
-        crate::tick();
+            crate::tick();
 
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
+            assert_eq!(counter.load(Ordering::SeqCst), 0);
 
-        crate::tick();
+            crate::tick();
 
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
+            assert_eq!(counter.load(Ordering::SeqCst), 1);
+        });
     }
 }

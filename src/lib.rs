@@ -244,25 +244,27 @@ mod tests {
 
     #[test]
     fn test_rt_simple_tick() {
-        let counter = Rc::new(AtomicU8::new(0));
+        with_runtime(|| {
+            let counter = Rc::new(AtomicU8::new(0));
 
-        {
-            let counter = counter.clone();
-            crate::spawn(async move {
-                counter.fetch_add(1, Ordering::Relaxed);
-            });
-        }
+            {
+                let counter = counter.clone();
+                crate::spawn(async move {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                });
+            }
 
-        crate::tick();
+            crate::tick();
 
-        assert_eq!(counter.load(Ordering::Relaxed), 1);
+            assert_eq!(counter.load(Ordering::Relaxed), 1);
+        });
     }
 
     #[bench]
     fn bench_rt_empty(b: &mut test::Bencher) {
         with_runtime(|| {
             get_rt().clear();
-            b.iter(|| crate::tick());
+            b.iter(crate::tick);
         });
     }
 
@@ -275,7 +277,7 @@ mod tests {
                 }
             });
 
-            b.iter(|| crate::tick());
+            b.iter(crate::tick);
         });
     }
 
@@ -290,7 +292,7 @@ mod tests {
                 });
             }
 
-            b.iter(|| crate::tick());
+            b.iter(crate::tick);
         });
     }
 
@@ -305,7 +307,7 @@ mod tests {
                 });
             }
 
-            b.iter(|| crate::tick());
+            b.iter(crate::tick);
         });
     }
 
@@ -320,7 +322,7 @@ mod tests {
                 });
             }
 
-            b.iter(|| crate::tick());
+            b.iter(crate::tick);
         });
     }
 
@@ -335,7 +337,7 @@ mod tests {
                 });
             }
 
-            b.iter(|| crate::tick());
+            b.iter(crate::tick);
         });
     }
 
@@ -350,7 +352,26 @@ mod tests {
                 });
             }
 
-            b.iter(|| crate::tick());
+            b.iter(crate::tick);
+        });
+    }
+
+    #[bench]
+    fn bench_select(b: &mut test::Bencher) {
+        with_runtime(|| {
+            crate::spawn(async move {
+                loop {
+                    let a = crate::wait::ticks(2);
+                    let b = crate::wait::ticks(1);
+
+                    std::hint::black_box(crate::select! {
+                        _ = a => {},
+                        _ = b => {},
+                    });
+                }
+            });
+
+            b.iter(crate::tick);
         });
     }
 }
