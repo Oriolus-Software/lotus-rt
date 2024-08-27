@@ -15,7 +15,7 @@ pub mod sync {
     pub use tokio::sync::*;
 }
 
-pub use tokio::{join, pin, try_join};
+pub use tokio::{join, pin, select, try_join};
 
 #[derive(Default)]
 struct Runtime {
@@ -27,9 +27,7 @@ struct Runtime {
 impl Runtime {
     #[cfg(test)]
     fn clear(&mut self) {
-        self.current_tick = 0;
-        self.futures.clear();
-        self.on_tick.clear();
+        *self = Default::default();
     }
 }
 
@@ -68,10 +66,12 @@ impl From<tokio::sync::oneshot::error::RecvError> for TryRecvError {
 }
 
 impl<T> JoinHandle<T> {
+    #[inline(always)]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
         Ok(self.0.try_recv()?)
     }
 
+    #[inline(always)]
     pub async fn into_future(self) -> Result<T, TryRecvError> {
         Ok(self.0.await?)
     }
@@ -91,11 +91,13 @@ where
     JoinHandle(rx)
 }
 
+#[inline(always)]
 pub fn tick() {
     get_rt().tick();
 }
 
 impl Runtime {
+    #[inline(always)]
     pub fn spawn<F>(&mut self, f: F)
     where
         F: Future<Output = ()> + 'static,
@@ -115,6 +117,10 @@ impl Runtime {
         }
 
         while let Some(timer) = self.on_tick.pop() {
+            if unsafe { *timer.dropped.get() } {
+                continue;
+            }
+
             if timer.expires <= self.current_tick {
                 (timer.callback)();
             } else {
@@ -143,6 +149,7 @@ impl Runtime {
 
 struct TickTimer {
     expires: u64,
+    dropped: Rc<UnsafeCell<bool>>,
     callback: Box<dyn FnOnce()>,
 }
 
@@ -202,10 +209,12 @@ impl MyFuture {
         unsafe { Waker::from_raw(raw_waker) }
     }
 
+    #[inline(always)]
     fn into_raw(self) -> *const () {
         Rc::into_raw(self.0) as *const ()
     }
 
+    #[inline(always)]
     unsafe fn from_raw(ptr: *const ()) -> Self {
         Self(Rc::from_raw(
             ptr as *const UnsafeCell<Pin<Box<dyn Future<Output = ()>>>>,

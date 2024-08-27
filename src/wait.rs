@@ -1,42 +1,63 @@
 pub use self::ticks::*;
 mod ticks {
-    use std::{future::Future, ops::DerefMut, pin::Pin, task::Poll};
+    use std::{
+        cell::UnsafeCell,
+        future::Future,
+        ops::DerefMut,
+        pin::Pin,
+        rc::Rc,
+        task::{Context, Poll},
+    };
 
     use crate::get_rt;
 
-    #[derive(Clone, Copy)]
     enum WaitTicks {
         Created(u64),
-        Waiting,
+        Waiting(Rc<UnsafeCell<bool>>),
         Done,
     }
 
     impl Future for WaitTicks {
         type Output = ();
 
-        fn poll(
-            mut self: Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Self::Output> {
-            match *self {
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let ptr = self.deref_mut() as *mut Self;
+            let (new_self, poll) = match &*self {
                 WaitTicks::Created(to_wait) => {
                     let waker = cx.waker().clone();
-                    let ptr = self.deref_mut() as *mut Self;
+                    let dropped = Rc::new(UnsafeCell::new(false));
 
-                    *self = WaitTicks::Waiting;
+                    {
+                        let dropped = dropped.clone();
+                        crate::get_rt().on_tick.push(crate::TickTimer {
+                            expires: get_rt().current_tick + to_wait,
+                            dropped,
+                            callback: Box::new(move || {
+                                unsafe { *ptr = WaitTicks::Done };
+                                waker.wake();
+                            }),
+                        });
+                    }
 
-                    crate::get_rt().on_tick.push(crate::TickTimer {
-                        expires: get_rt().current_tick + to_wait,
-                        callback: Box::new(move || {
-                            unsafe { *ptr = WaitTicks::Done };
-                            waker.wake();
-                        }),
-                    });
-
-                    Poll::Pending
+                    (Some(WaitTicks::Waiting(dropped)), Poll::Pending)
                 }
-                WaitTicks::Waiting => Poll::Pending,
-                WaitTicks::Done => Poll::Ready(()),
+                WaitTicks::Waiting(_) => (None, Poll::Pending),
+                WaitTicks::Done => (None, Poll::Ready(())),
+            };
+
+            if let Some(new_self) = new_self {
+                *self = new_self;
+            }
+
+            poll
+        }
+    }
+
+    impl Drop for WaitTicks {
+        #[inline(always)]
+        fn drop(&mut self) {
+            if let WaitTicks::Waiting(dropped) = self {
+                unsafe { *dropped.get() = true };
             }
         }
     }
@@ -64,7 +85,7 @@ pub async fn seconds(count: f32) {
 
         #[cfg(not(feature = "std"))]
         {
-            elapsed += lotus_script::delta();
+            elapsed += lotus_script::time::delta();
         }
     }
 }

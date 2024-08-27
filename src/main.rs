@@ -50,7 +50,17 @@ fn main() {
         println!("After technically 6 ticks");
     });
 
-    for i in 0..5 {
+    lotus_rt::spawn(async move {
+        let a = wait::ticks(1);
+        let b = wait::ticks(2);
+
+        tokio::select! {
+            _ = a => println!("a finished first"),
+            _ = b => println!("b finished first"),
+        }
+    });
+
+    for i in 0..3 {
         println!("Tick {i}");
         lotus_rt::tick();
     }
