@@ -236,6 +236,7 @@ mod tests {
         F: FnOnce() -> R,
     {
         let rt = get_rt();
+        rt.clear();
         let result = f();
         rt.clear();
         result
