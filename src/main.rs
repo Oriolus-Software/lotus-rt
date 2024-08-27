@@ -14,7 +14,8 @@ fn main() {
 
     lotus_rt::spawn(async move {
         println!("Loading, please wait...");
-        println!("3 + 5 = {}", add(3, 5).await);
+        let addition = lotus_rt::spawn(add(3, 5));
+        println!("3 + 5 = {}", addition.into_future().await.unwrap());
     });
 
     lotus_rt::spawn(async move {

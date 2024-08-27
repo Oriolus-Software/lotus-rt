@@ -18,7 +18,7 @@ mod ticks {
             mut self: Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Self::Output> {
-            match self.clone() {
+            match *self {
                 WaitTicks::Created(to_wait) => {
                     let waker = cx.waker().clone();
                     let ptr = self.deref_mut() as *mut Self;

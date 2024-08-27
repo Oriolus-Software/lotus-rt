@@ -42,11 +42,53 @@ fn get_rt() -> &'static mut Runtime {
     RT.with(|rt| unsafe { &mut *rt.get() })
 }
 
-pub fn spawn<F>(f: F)
+pub struct JoinHandle<T>(crate::sync::oneshot::Receiver<T>);
+
+#[derive(Debug, thiserror::Error)]
+pub enum TryRecvError {
+    #[error("the result has not been computed yet")]
+    Empty,
+    #[error("the future has been dropped")]
+    FutureDropped,
+}
+
+impl From<tokio::sync::oneshot::error::TryRecvError> for TryRecvError {
+    fn from(value: tokio::sync::oneshot::error::TryRecvError) -> Self {
+        match value {
+            tokio::sync::oneshot::error::TryRecvError::Empty => TryRecvError::Empty,
+            tokio::sync::oneshot::error::TryRecvError::Closed => TryRecvError::FutureDropped,
+        }
+    }
+}
+
+impl From<tokio::sync::oneshot::error::RecvError> for TryRecvError {
+    fn from(_: tokio::sync::oneshot::error::RecvError) -> Self {
+        TryRecvError::FutureDropped
+    }
+}
+
+impl<T> JoinHandle<T> {
+    pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
+        Ok(self.0.try_recv()?)
+    }
+
+    pub async fn into_future(self) -> Result<T, TryRecvError> {
+        Ok(self.0.await?)
+    }
+}
+
+pub fn spawn<F, R>(f: F) -> JoinHandle<R>
 where
-    F: Future<Output = ()> + 'static,
+    F: Future<Output = R> + 'static,
+    R: 'static,
 {
-    get_rt().spawn(f);
+    let (tx, rx) = crate::sync::oneshot::channel();
+    get_rt().spawn(async move {
+        let result = f.await;
+        tx.send(result).ok();
+    });
+
+    JoinHandle(rx)
 }
 
 pub fn tick() {
@@ -140,7 +182,11 @@ const RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
         let fut = unsafe { MyFuture::from_raw(p) };
         get_rt().futures.push(fut);
     },
-    |_| todo!(),
+    |p| {
+        let fut = unsafe { MyFuture::from_raw(p) };
+        get_rt().futures.push(fut.clone());
+        std::mem::forget(fut);
+    },
     |p| unsafe {
         MyFuture::from_raw(p);
     },

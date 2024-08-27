@@ -93,6 +93,7 @@ name = "lotus-rt"
 version = "0.1.0"
 dependencies = [
  "lotus-script",
+ "thiserror",
  "tokio",
 ]
 

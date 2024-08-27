@@ -12,6 +12,7 @@ macros = ["dep:tokio", "tokio/macros"]
 
 [dependencies]
 lotus-script = { version = "0.5", optional = true }
+thiserror = "1.0.63"
 tokio = { version = "1.39.3", default-features = false, optional = true }
 
 [profile.release]
