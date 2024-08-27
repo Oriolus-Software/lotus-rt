@@ -20,7 +20,7 @@ fn main() {
 
     lotus_rt::spawn(async move {
         wait::ticks(3).await;
-        println!("After techically 4 ticks");
+        println!("After technically 4 ticks");
     });
 
     lotus_rt::spawn(async move {
@@ -47,7 +47,7 @@ fn main() {
     lotus_rt::spawn(async move {
         wait::ticks(5).await;
 
-        println!("After techincally 6 ticks");
+        println!("After technically 6 ticks");
     });
 
     for i in 0..5 {

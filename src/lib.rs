@@ -2,7 +2,7 @@
 
 use std::{
     cell::UnsafeCell,
-    collections::BinaryHeap,
+    collections::{BinaryHeap, VecDeque},
     future::Future,
     pin::Pin,
     rc::Rc,
@@ -20,7 +20,7 @@ pub use tokio::{join, pin, try_join};
 #[derive(Default)]
 struct Runtime {
     current_tick: u64,
-    futures: Vec<MyFuture>,
+    futures: VecDeque<MyFuture>,
     on_tick: BinaryHeap<TickTimer>,
 }
 
@@ -101,7 +101,7 @@ impl Runtime {
         F: Future<Output = ()> + 'static,
     {
         self.futures
-            .push(MyFuture(Rc::new(UnsafeCell::new(Box::pin(f)))));
+            .push_back(MyFuture(Rc::new(UnsafeCell::new(Box::pin(f)))));
     }
 
     pub fn tick(&mut self) {
@@ -127,7 +127,7 @@ impl Runtime {
     }
 
     pub fn execute(&mut self) {
-        while let Some(future) = self.futures.pop() {
+        while let Some(future) = self.futures.pop_front() {
             let waker = future.create_waker();
 
             let mut cx = std::task::Context::from_waker(&waker);
@@ -156,13 +156,13 @@ impl Eq for TickTimer {}
 
 impl PartialOrd for TickTimer {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.expires.cmp(&other.expires))
+        Some(other.expires.cmp(&self.expires))
     }
 }
 
 impl Ord for TickTimer {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.expires.cmp(&other.expires)
+        other.expires.cmp(&self.expires)
     }
 }
 
@@ -180,11 +180,11 @@ const RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
     },
     |p| {
         let fut = unsafe { MyFuture::from_raw(p) };
-        get_rt().futures.push(fut);
+        get_rt().futures.push_back(fut);
     },
     |p| {
         let fut = unsafe { MyFuture::from_raw(p) };
-        get_rt().futures.push(fut.clone());
+        get_rt().futures.push_back(fut.clone());
         std::mem::forget(fut);
     },
     |p| unsafe {
