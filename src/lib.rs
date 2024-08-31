@@ -15,6 +15,7 @@ pub mod sync {
     pub use tokio::sync::*;
 }
 
+#[cfg(feature = "macros")]
 pub use tokio::{join, pin, select, try_join};
 
 #[derive(Default)]
