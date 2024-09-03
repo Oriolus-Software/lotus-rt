@@ -29,7 +29,7 @@ mod ticks {
 
                     {
                         let dropped = dropped.clone();
-                        crate::get_rt().on_tick.push(crate::TickTimer {
+                        crate::get_rt().add_timer(crate::TickTimer {
                             expires: get_rt().current_tick + to_wait,
                             dropped,
                             callback: Box::new(move || {
@@ -116,6 +116,8 @@ mod lotus {
             if state.kind.is_just_pressed() {
                 return state;
             }
+
+            super::next_tick().await;
         }
     }
 
@@ -125,6 +127,8 @@ mod lotus {
             if state.kind.is_just_released() {
                 return state;
             }
+
+            super::next_tick().await;
         }
     }
 

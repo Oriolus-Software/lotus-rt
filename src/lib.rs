@@ -2,6 +2,7 @@
 
 use std::{
     cell::UnsafeCell,
+    cmp::Reverse,
     collections::{BinaryHeap, VecDeque},
     future::Future,
     pin::Pin,
@@ -22,10 +23,14 @@ pub use tokio::{join, pin, select, try_join};
 struct Runtime {
     current_tick: u64,
     futures: VecDeque<MyFuture>,
-    on_tick: BinaryHeap<TickTimer>,
+    on_tick: BinaryHeap<Reverse<TickTimer>>,
 }
 
 impl Runtime {
+    fn add_timer(&mut self, timer: TickTimer) {
+        self.on_tick.push(Reverse(timer));
+    }
+
     #[cfg(test)]
     fn clear(&mut self) {
         *self = Default::default();
@@ -118,12 +123,12 @@ impl Runtime {
         }
 
         while let Some(timer) = self.on_tick.pop() {
-            if unsafe { *timer.dropped.get() } {
+            if unsafe { *timer.0.dropped.get() } {
                 continue;
             }
 
-            if timer.expires <= self.current_tick {
-                (timer.callback)();
+            if timer.0.expires <= self.current_tick {
+                (timer.0.callback)();
             } else {
                 self.on_tick.push(timer);
                 break;
@@ -164,13 +169,13 @@ impl Eq for TickTimer {}
 
 impl PartialOrd for TickTimer {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(other.expires.cmp(&self.expires))
+        Some(self.expires.cmp(&other.expires))
     }
 }
 
 impl Ord for TickTimer {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other.expires.cmp(&self.expires)
+        self.expires.cmp(&other.expires)
     }
 }
 
