@@ -101,12 +101,12 @@ mod lotus {
 
     pub async fn action(id: &str) -> ActionState {
         loop {
+            super::next_tick().await;
+
             let state = lotus_script::action::state(id);
             if state.kind != ActionStateKind::None {
                 return state;
             }
-
-            super::next_tick().await;
         }
     }
 
@@ -116,8 +116,6 @@ mod lotus {
             if state.kind.is_just_pressed() {
                 return state;
             }
-
-            super::next_tick().await;
         }
     }
 
@@ -127,20 +125,18 @@ mod lotus {
             if state.kind.is_just_released() {
                 return state;
             }
-
-            super::next_tick().await;
         }
     }
 
     pub async fn variable_change<T: VariableType + PartialEq>(name: &str) -> T {
         let current = T::get(name);
         loop {
+            super::next_tick().await;
+
             let new = T::get(name);
             if new != current {
                 return new;
             }
-
-            super::next_tick().await;
         }
     }
 }
