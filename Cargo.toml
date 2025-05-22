@@ -11,7 +11,7 @@ sync = ["dep:tokio", "tokio/sync"]
 macros = ["dep:tokio", "tokio/macros"]
 
 [dependencies]
-lotus-script = { version = "0.6", optional = true }
+lotus-script = { git = "https://github.com/Oriolus-Software/LOTUS-Scripting.git", branch = "master", optional = true }
 thiserror = "2"
 tokio = { version = "1", default-features = false, optional = true }
 

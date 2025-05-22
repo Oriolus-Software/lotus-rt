@@ -129,11 +129,11 @@ mod lotus {
     }
 
     pub async fn variable_change<T: VariableType<Output: PartialEq>>(name: &str) -> T::Output {
-        let current = T::get(name);
+        let current = T::get_var(name);
         loop {
             super::next_tick().await;
 
-            let new = T::get(name);
+            let new = T::get_var(name);
             if new != current {
                 return new;
             }
