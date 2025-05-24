@@ -1,5 +1,3 @@
-#![cfg_attr(test, feature(test))]
-
 use std::{
     cell::UnsafeCell,
     cmp::Reverse,
@@ -228,8 +226,6 @@ impl MyFuture {
 
 #[cfg(test)]
 mod tests {
-    extern crate test;
-
     use std::{
         rc::Rc,
         sync::atomic::{AtomicU8, Ordering},
@@ -263,121 +259,6 @@ mod tests {
             crate::tick();
 
             assert_eq!(counter.load(Ordering::Relaxed), 1);
-        });
-    }
-
-    #[bench]
-    fn bench_rt_empty(b: &mut test::Bencher) {
-        with_runtime(|| {
-            get_rt().clear();
-            b.iter(crate::tick);
-        });
-    }
-
-    #[bench]
-    fn bench_rt_1_future(b: &mut test::Bencher) {
-        with_runtime(|| {
-            crate::spawn(async {
-                loop {
-                    crate::wait::next_tick().await;
-                }
-            });
-
-            b.iter(crate::tick);
-        });
-    }
-
-    #[bench]
-    fn bench_rt_2_futures(b: &mut test::Bencher) {
-        with_runtime(|| {
-            for _ in 0..2 {
-                crate::spawn(async {
-                    loop {
-                        crate::wait::next_tick().await;
-                    }
-                });
-            }
-
-            b.iter(crate::tick);
-        });
-    }
-
-    #[bench]
-    fn bench_rt_5_futures(b: &mut test::Bencher) {
-        with_runtime(|| {
-            for _ in 0..5 {
-                crate::spawn(async {
-                    loop {
-                        crate::wait::next_tick().await;
-                    }
-                });
-            }
-
-            b.iter(crate::tick);
-        });
-    }
-
-    #[bench]
-    fn bench_rt_100_futures(b: &mut test::Bencher) {
-        with_runtime(|| {
-            for _ in 0..100 {
-                crate::spawn(async {
-                    loop {
-                        crate::wait::next_tick().await;
-                    }
-                });
-            }
-
-            b.iter(crate::tick);
-        });
-    }
-
-    #[bench]
-    fn bench_rt_1000_futures(b: &mut test::Bencher) {
-        with_runtime(|| {
-            for _ in 0..1000 {
-                crate::spawn(async {
-                    loop {
-                        crate::wait::next_tick().await;
-                    }
-                });
-            }
-
-            b.iter(crate::tick);
-        });
-    }
-
-    #[bench]
-    fn bench_rt_10_000_futures(b: &mut test::Bencher) {
-        with_runtime(|| {
-            for _ in 0..10_000 {
-                crate::spawn(async {
-                    loop {
-                        crate::wait::next_tick().await;
-                    }
-                });
-            }
-
-            b.iter(crate::tick);
-        });
-    }
-
-    #[bench]
-    fn bench_select(b: &mut test::Bencher) {
-        with_runtime(|| {
-            crate::spawn(async move {
-                loop {
-                    let a = crate::wait::ticks(2);
-                    let b = crate::wait::ticks(1);
-
-                    std::hint::black_box(crate::select! {
-                        _ = a => {},
-                        _ = b => {},
-                    });
-                }
-            });
-
-            b.iter(crate::tick);
         });
     }
 }
