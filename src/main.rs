@@ -70,7 +70,7 @@ fn main() {
     lotus_rt::tick();
 
     let elapsed = start.elapsed();
-    println!("Elapsed: {:?}", elapsed);
+    println!("Elapsed: {elapsed:?}");
 }
 
 async fn generate_value<T>(val: T) -> T {

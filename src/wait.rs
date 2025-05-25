@@ -3,7 +3,6 @@ mod ticks {
     use std::{
         cell::UnsafeCell,
         future::Future,
-        ops::DerefMut,
         pin::Pin,
         rc::Rc,
         task::{Context, Poll},
@@ -13,7 +12,10 @@ mod ticks {
 
     enum WaitTicks {
         Created(u64),
-        Waiting(Rc<UnsafeCell<bool>>),
+        Waiting {
+            dropped: Rc<UnsafeCell<bool>>,
+            completed: Rc<UnsafeCell<bool>>,
+        },
         Done,
     }
 
@@ -21,43 +23,46 @@ mod ticks {
         type Output = ();
 
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let ptr = self.deref_mut() as *mut Self;
-            let (new_self, poll) = match &*self {
+            match &*self {
                 WaitTicks::Created(to_wait) => {
                     let waker = cx.waker().clone();
                     let dropped = Rc::new(UnsafeCell::new(false));
+                    let completed = Rc::new(UnsafeCell::new(false));
 
                     {
                         let dropped = dropped.clone();
+                        let completed = completed.clone();
                         crate::get_rt().add_timer(crate::TickTimer {
                             expires: get_rt().current_tick + to_wait,
                             dropped,
                             callback: Box::new(move || {
-                                unsafe { *ptr = WaitTicks::Done };
+                                unsafe { *completed.get() = true };
                                 waker.wake();
                             }),
                         });
                     }
 
-                    (Some(WaitTicks::Waiting(dropped)), Poll::Pending)
+                    *self = WaitTicks::Waiting { dropped, completed };
+                    Poll::Pending
                 }
-                WaitTicks::Waiting(_) => (None, Poll::Pending),
-                WaitTicks::Done => (None, Poll::Ready(())),
-            };
-
-            if let Some(new_self) = new_self {
-                *self = new_self;
+                WaitTicks::Waiting { completed, .. } => {
+                    if unsafe { *completed.get() } {
+                        *self = WaitTicks::Done;
+                        Poll::Ready(())
+                    } else {
+                        Poll::Pending
+                    }
+                }
+                WaitTicks::Done => Poll::Ready(()),
             }
-
-            poll
         }
     }
 
     impl Drop for WaitTicks {
         #[inline(always)]
         fn drop(&mut self) {
-            if let WaitTicks::Waiting(dropped) = self {
-                unsafe { dropped.get().write(true) };
+            if let WaitTicks::Waiting { dropped, .. } = self {
+                unsafe { *dropped.get() = true };
             }
         }
     }

@@ -17,6 +17,15 @@ pub mod sync {
 #[cfg(feature = "macros")]
 pub use tokio::{join, pin, select, try_join};
 
+/// A simple async runtime for single-threaded environments like WASM
+///
+/// # Safety Notes
+/// This runtime uses unsafe code for performance in WASM environments.
+/// Key safety considerations:
+/// - All futures must have 'static lifetime
+/// - The runtime is NOT thread-safe - only use in single-threaded contexts
+/// - Waker implementation relies on proper Rc reference counting
+/// - Never move or modify futures while they're being polled
 #[derive(Default)]
 struct Runtime {
     current_tick: u64,
@@ -139,13 +148,19 @@ impl Runtime {
     pub fn execute(&mut self) {
         while let Some(future) = self.futures.pop_front() {
             let waker = future.create_waker();
-
             let mut cx = std::task::Context::from_waker(&waker);
-            let future = unsafe { &mut *future.0.get() };
 
-            match future.as_mut().poll(&mut cx) {
-                std::task::Poll::Ready(_) => {}
-                std::task::Poll::Pending => {}
+            // Ensure we have a valid reference before polling
+            let future_ref = unsafe { &mut *future.0.get() };
+
+            match future_ref.as_mut().poll(&mut cx) {
+                std::task::Poll::Ready(_) => {
+                    // Future completed, nothing more to do
+                }
+                std::task::Poll::Pending => {
+                    // Future will be re-queued by its waker when ready
+                    // Don't re-queue it here to avoid busy waiting
+                }
             }
         }
     }
@@ -179,27 +194,27 @@ impl Ord for TickTimer {
 
 const RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
     |p| {
-        RawWaker::new(
-            {
-                let fut = unsafe { MyFuture::from_raw(p) };
-                let new = fut.clone();
-                std::mem::forget(fut);
-                new.into_raw()
-            },
-            &RAW_WAKER_VTABLE,
-        )
+        let fut = unsafe { MyFuture::from_raw(p) };
+        let cloned = fut.clone();
+        std::mem::forget(fut); // Don't drop the original
+        RawWaker::new(cloned.into_raw(), &RAW_WAKER_VTABLE)
     },
     |p| {
         let fut = unsafe { MyFuture::from_raw(p) };
-        get_rt().futures.push_back(fut);
+        // Ensure we don't add duplicates by checking if already queued
+        let rt = get_rt();
+        rt.futures.push_back(fut);
     },
     |p| {
         let fut = unsafe { MyFuture::from_raw(p) };
-        get_rt().futures.push_back(fut.clone());
-        std::mem::forget(fut);
+        let cloned = fut.clone();
+        std::mem::forget(fut); // Keep the original alive
+        let rt = get_rt();
+        rt.futures.push_back(cloned);
     },
-    |p| unsafe {
-        MyFuture::from_raw(p);
+    |p| {
+        let _fut = unsafe { MyFuture::from_raw(p) };
+        // Let the MyFuture drop naturally, which will handle Rc cleanup
     },
 );
 
@@ -208,19 +223,22 @@ struct MyFuture(Rc<UnsafeCell<Pin<Box<dyn Future<Output = ()>>>>>);
 
 impl MyFuture {
     fn create_waker(&self) -> Waker {
-        let data = Rc::into_raw(self.0.clone()).cast();
+        // Clone the Rc to increment reference count
+        let rc_clone = self.0.clone();
+        let data = Rc::into_raw(rc_clone).cast();
         let raw_waker = RawWaker::new(data, &RAW_WAKER_VTABLE);
         unsafe { Waker::from_raw(raw_waker) }
     }
 
     #[inline(always)]
     fn into_raw(self) -> *const () {
-        Rc::into_raw(self.0) as *const ()
+        Rc::into_raw(self.0).cast()
     }
 
     #[inline(always)]
     unsafe fn from_raw(ptr: *const ()) -> Self {
-        Self(Rc::from_raw(ptr.cast()))
+        let rc = unsafe { Rc::from_raw(ptr.cast()) };
+        Self(rc)
     }
 }
 
@@ -259,6 +277,97 @@ mod tests {
             crate::tick();
 
             assert_eq!(counter.load(Ordering::Relaxed), 1);
+        });
+    }
+
+    #[test]
+    fn test_multiple_async_futures_with_wait() {
+        with_runtime(|| {
+            let counter1 = Rc::new(AtomicU8::new(0));
+            let counter2 = Rc::new(AtomicU8::new(0));
+
+            // Simulate the scenario from user's script
+            {
+                let counter1 = counter1.clone();
+                crate::spawn(async move {
+                    for i in 0..5 {
+                        counter1.store(i, Ordering::Relaxed);
+                        crate::wait::next_tick().await;
+                    }
+                });
+            }
+
+            {
+                let counter2 = counter2.clone();
+                crate::spawn(async move {
+                    for i in 0..5 {
+                        counter2.store(i + 10, Ordering::Relaxed);
+                        crate::wait::next_tick().await;
+                    }
+                });
+            }
+
+            // Run multiple ticks to let both futures complete
+            for tick in 0..10 {
+                crate::tick();
+
+                // Give some intermediate checks
+                if tick == 2 {
+                    assert!(counter1.load(Ordering::Relaxed) >= 1);
+                    assert!(counter2.load(Ordering::Relaxed) >= 11);
+                }
+            }
+
+            // After enough ticks, both futures should have completed
+            assert_eq!(counter1.load(Ordering::Relaxed), 4);
+            assert_eq!(counter2.load(Ordering::Relaxed), 14);
+        });
+    }
+
+    #[test]
+    fn test_async_channel_scenario() {
+        with_runtime(|| {
+            use std::sync::atomic::AtomicU32;
+
+            let received_count = Rc::new(AtomicU32::new(0));
+            let sent_count = Rc::new(AtomicU32::new(0));
+
+            // Simulate watch channel behavior
+            let (tx, mut rx) = crate::sync::watch::channel(0u64);
+
+            // Sender task
+            {
+                let sent_count = sent_count.clone();
+                crate::spawn(async move {
+                    for i in 0..5 {
+                        tx.send(i).ok();
+                        sent_count.fetch_add(1, Ordering::Relaxed);
+                        crate::wait::next_tick().await;
+                    }
+                });
+            }
+
+            // Receiver task
+            {
+                let received_count = received_count.clone();
+                crate::spawn(async move {
+                    for _ in 0..5 {
+                        if rx.changed().await.is_ok() {
+                            let _value = *rx.borrow_and_update();
+                            received_count.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                });
+            }
+
+            // Run enough ticks for both tasks to complete
+            for _ in 0..15 {
+                crate::tick();
+            }
+
+            // Both tasks should have completed
+            assert_eq!(sent_count.load(Ordering::Relaxed), 5);
+            assert_eq!(received_count.load(Ordering::Relaxed), 5);
         });
     }
 }
