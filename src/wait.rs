@@ -99,20 +99,56 @@ pub async fn seconds(count: f32) {
 pub use self::lotus::*;
 #[cfg(feature = "lotus")]
 mod lotus {
-    use lotus_script::{
-        input::{ActionState, ActionStateKind},
-        var::VariableType,
+    use std::{
+        cell::UnsafeCell,
+        future::Future,
+        pin::Pin,
+        rc::Rc,
+        task::{Context, Poll},
     };
 
-    pub async fn action(id: &str) -> ActionState {
-        loop {
-            super::next_tick().await;
+    use lotus_script::{input::ActionState, var::VariableType};
 
-            let state = lotus_script::action::state(id);
-            if state.kind != ActionStateKind::None {
-                return state;
+    use crate::get_rt;
+
+    enum WaitAction {
+        Created(String),
+        Waiting {
+            result: Rc<UnsafeCell<Option<ActionState>>>,
+        },
+        Done(ActionState),
+    }
+
+    impl Future for WaitAction {
+        type Output = ActionState;
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            match &*self {
+                WaitAction::Created(id) => {
+                    let result = Rc::new(UnsafeCell::new(None));
+                    let waker = cx.waker().clone();
+
+                    get_rt().register_action_waiter(id.clone(), waker, result.clone());
+
+                    *self = WaitAction::Waiting { result };
+                    Poll::Pending
+                }
+                WaitAction::Waiting { result } => {
+                    let state_opt = unsafe { *result.get() };
+                    if let Some(state) = state_opt {
+                        *self = WaitAction::Done(state);
+                        Poll::Ready(state)
+                    } else {
+                        Poll::Pending
+                    }
+                }
+                WaitAction::Done(state) => Poll::Ready(*state),
             }
         }
+    }
+
+    pub async fn action(id: &str) -> ActionState {
+        WaitAction::Created(id.to_string()).await
     }
 
     pub async fn just_pressed(id: &str) -> ActionState {

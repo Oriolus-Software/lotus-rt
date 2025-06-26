@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["std", "sync", "macros"]
+default = ["std", "sync", "macros", "lotus"]
 std = []
 lotus = ["dep:lotus-script"]
 sync = ["dep:tokio", "tokio/sync"]
