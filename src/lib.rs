@@ -53,7 +53,10 @@ fn get_rt() -> &'static mut Runtime {
     RT.with(|rt| unsafe { &mut *rt.get() })
 }
 
-pub struct JoinHandle<T>(crate::sync::oneshot::Receiver<T>);
+pub struct JoinHandle<T> {
+    receiver: crate::sync::oneshot::Receiver<T>,
+    cancelled: Rc<UnsafeCell<bool>>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum TryRecvError {
@@ -61,6 +64,8 @@ pub enum TryRecvError {
     Empty,
     #[error("the future has been dropped")]
     FutureDropped,
+    #[error("the future has been cancelled")]
+    Cancelled,
 }
 
 impl From<tokio::sync::oneshot::error::TryRecvError> for TryRecvError {
@@ -81,12 +86,92 @@ impl From<tokio::sync::oneshot::error::RecvError> for TryRecvError {
 impl<T> JoinHandle<T> {
     #[inline(always)]
     pub fn try_recv(&mut self) -> Result<T, TryRecvError> {
-        Ok(self.0.try_recv()?)
+        // Check if cancelled first
+        if unsafe { *self.cancelled.get() } {
+            return Err(TryRecvError::Cancelled);
+        }
+
+        Ok(self.receiver.try_recv()?)
     }
 
     #[inline(always)]
     pub async fn into_future(self) -> Result<T, TryRecvError> {
-        Ok(self.0.await?)
+        // Check if cancelled first
+        if unsafe { *self.cancelled.get() } {
+            return Err(TryRecvError::Cancelled);
+        }
+
+        Ok(self.receiver.await?)
+    }
+
+    /// Cancel the spawned future
+    #[inline(always)]
+    pub fn cancel(&self) {
+        unsafe {
+            *self.cancelled.get() = true;
+        }
+    }
+
+    /// Check if the future has been cancelled
+    #[inline(always)]
+    pub fn is_cancelled(&self) -> bool {
+        unsafe { *self.cancelled.get() }
+    }
+}
+
+/// A future wrapper that can be cancelled
+struct CancellableFuture<F> {
+    inner: Pin<Box<F>>,
+    cancelled: Rc<UnsafeCell<bool>>,
+}
+
+impl<F> CancellableFuture<F> {
+    fn new(future: F, cancelled: Rc<UnsafeCell<bool>>) -> Self {
+        Self {
+            inner: Box::pin(future),
+            cancelled,
+        }
+    }
+}
+
+impl<F: Future> Future for CancellableFuture<F> {
+    type Output = F::Output;
+
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        // Check if cancelled before polling
+        if unsafe { *self.cancelled.get() } {
+            return std::task::Poll::Pending; // Just stay pending forever if cancelled
+        }
+
+        // Poll the inner future
+        self.inner.as_mut().poll(cx)
+    }
+}
+
+#[derive(Clone)]
+struct MyFuture(Rc<UnsafeCell<Pin<Box<dyn Future<Output = ()>>>>>);
+
+impl MyFuture {
+    fn create_waker(&self) -> Waker {
+        // Clone the Rc to increment reference count
+        let rc_clone = self.0.clone();
+        let data = Rc::into_raw(rc_clone).cast();
+        let raw_waker = RawWaker::new(data, &RAW_WAKER_VTABLE);
+        unsafe { Waker::from_raw(raw_waker) }
+    }
+
+    #[inline(always)]
+    fn into_raw(self) -> *const () {
+        Rc::into_raw(self.0).cast()
+    }
+
+    #[inline(always)]
+    unsafe fn from_raw(ptr: *const ()) -> Self {
+        let rc = unsafe { Rc::from_raw(ptr.cast()) };
+        Self(rc)
     }
 }
 
@@ -96,12 +181,25 @@ where
     R: 'static,
 {
     let (tx, rx) = crate::sync::oneshot::channel();
+    let cancelled = Rc::new(UnsafeCell::new(false));
+    let cancelled_clone = cancelled.clone();
+
+    // Create a cancellable wrapper around the user's future
+    let cancellable_future = CancellableFuture::new(f, cancelled_clone.clone());
+
     get_rt().spawn(async move {
-        let result = f.await;
-        tx.send(result).ok();
+        let result = cancellable_future.await;
+
+        // Only send the result if not cancelled
+        if !unsafe { *cancelled_clone.get() } {
+            tx.send(result).ok();
+        }
     });
 
-    JoinHandle(rx)
+    JoinHandle {
+        receiver: rx,
+        cancelled,
+    }
 }
 
 #[inline(always)]
@@ -217,30 +315,6 @@ const RAW_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
         // Let the MyFuture drop naturally, which will handle Rc cleanup
     },
 );
-
-#[derive(Clone)]
-struct MyFuture(Rc<UnsafeCell<Pin<Box<dyn Future<Output = ()>>>>>);
-
-impl MyFuture {
-    fn create_waker(&self) -> Waker {
-        // Clone the Rc to increment reference count
-        let rc_clone = self.0.clone();
-        let data = Rc::into_raw(rc_clone).cast();
-        let raw_waker = RawWaker::new(data, &RAW_WAKER_VTABLE);
-        unsafe { Waker::from_raw(raw_waker) }
-    }
-
-    #[inline(always)]
-    fn into_raw(self) -> *const () {
-        Rc::into_raw(self.0).cast()
-    }
-
-    #[inline(always)]
-    unsafe fn from_raw(ptr: *const ()) -> Self {
-        let rc = unsafe { Rc::from_raw(ptr.cast()) };
-        Self(rc)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -368,6 +442,103 @@ mod tests {
             // Both tasks should have completed
             assert_eq!(sent_count.load(Ordering::Relaxed), 5);
             assert_eq!(received_count.load(Ordering::Relaxed), 5);
+        });
+    }
+
+    #[test]
+    fn test_join_handle_cancellation() {
+        with_runtime(|| {
+            let counter = Rc::new(AtomicU8::new(0));
+
+            // Spawn a future that would normally increment the counter multiple times
+            let mut handle = {
+                let counter = counter.clone();
+                crate::spawn(async move {
+                    for i in 0..10 {
+                        counter.store(i, Ordering::Relaxed);
+                        crate::wait::next_tick().await;
+                    }
+                    42u8 // Return value
+                })
+            };
+
+            // Let it run for a few ticks
+            crate::tick();
+            crate::tick();
+
+            // Cancel the future
+            handle.cancel();
+
+            // Verify it's cancelled
+            assert!(handle.is_cancelled());
+
+            // Try to receive - should return Cancelled error
+            match handle.try_recv() {
+                Err(crate::TryRecvError::Cancelled) => { /* Expected */ }
+                other => panic!("Expected Cancelled error, got: {:?}", other),
+            }
+
+            // Continue ticking - the future should not continue executing
+            let counter_value_after_cancel = counter.load(Ordering::Relaxed);
+            for _ in 0..10 {
+                crate::tick();
+            }
+
+            // Counter should not have changed after cancellation
+            assert_eq!(counter.load(Ordering::Relaxed), counter_value_after_cancel);
+        });
+    }
+
+    #[test]
+    fn test_join_handle_cancellation_async() {
+        with_runtime(|| {
+            use std::sync::atomic::AtomicBool;
+
+            let started = Rc::new(AtomicBool::new(false));
+            let finished = Rc::new(AtomicBool::new(false));
+
+            // Spawn a future that takes some time
+            let handle = {
+                let started = started.clone();
+                let finished = finished.clone();
+                crate::spawn(async move {
+                    started.store(true, Ordering::Relaxed);
+
+                    // Simulate some work with multiple yield points
+                    for _ in 0..5 {
+                        crate::wait::next_tick().await;
+                    }
+
+                    finished.store(true, Ordering::Relaxed);
+                    "completed"
+                })
+            };
+
+            // Let it start
+            crate::tick();
+            assert!(started.load(Ordering::Relaxed));
+            assert!(!finished.load(Ordering::Relaxed));
+
+            // Cancel it before it finishes
+            handle.cancel();
+
+            // Continue running the runtime
+            for _ in 0..10 {
+                crate::tick();
+            }
+
+            // Should still not be finished since we cancelled it
+            assert!(!finished.load(Ordering::Relaxed));
+
+            // async receive should also return cancelled
+            crate::spawn(async move {
+                match handle.into_future().await {
+                    Err(crate::TryRecvError::Cancelled) => { /* Expected */ }
+                    other => panic!("Expected Cancelled error, got: {:?}", other),
+                }
+            });
+
+            crate::tick();
         });
     }
 }
