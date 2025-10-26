@@ -80,7 +80,8 @@ checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 [[package]]
 name = "lotus-bindgen-macros"
 version = "0.1.1"
-source = "git+https://github.com/Oriolus-Software/LOTUS-Scripting.git?branch=master#f0a2caf9303ffc03bd5b4599961b861383dffe41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1cdc60f8c7469dcebfc65a675f398b914ddb2b70eee5eaf81f6c21d87cfee5f3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -98,8 +99,9 @@ dependencies = [
 
 [[package]]
 name = "lotus-script"
-version = "0.6.2"
-source = "git+https://github.com/Oriolus-Software/LOTUS-Scripting.git?branch=master#f0a2caf9303ffc03bd5b4599961b861383dffe41"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5177d81121568c5a3f3c26ba6783c2bf7c39dbfd6c9842d51735f5f2383c4ed7"
 dependencies = [
  "lotus-bindgen-macros",
  "lotus-script-sys",
@@ -113,8 +115,9 @@ dependencies = [
 
 [[package]]
 name = "lotus-script-sys"
-version = "0.3.0"
-source = "git+https://github.com/Oriolus-Software/LOTUS-Scripting.git?branch=master#f0a2caf9303ffc03bd5b4599961b861383dffe41"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f6688ba5373084b8a64b8a900fb410ee5fb8e1be7be512151b156da337349b0"
 dependencies = [
  "lotus-bindgen-macros",
  "rmp-serde",
@@ -124,8 +127,9 @@ dependencies = [
 
 [[package]]
 name = "lotus-shared"
-version = "0.4.1"
-source = "git+https://github.com/Oriolus-Software/LOTUS-Scripting.git?branch=master#f0a2caf9303ffc03bd5b4599961b861383dffe41"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d796031c4f8de8190b5bf4d5dd0b35a1d631eac596f29c04061f2d2f8a540587"
 dependencies = [
  "glam",
  "lotus-script-sys",
